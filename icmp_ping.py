@@ -131,10 +131,12 @@ def sendOnePing(icmpSocket, destinationAddress, port, ID):
     return recv_time
 
 
-def doOnePing(destinationAddress, port, timeout):
+def doOnePing(destinationAddress, port, timeout, TTL=None):
     ID = 1
     # 1. Create ICMP socket
     icmp_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW)
+    if TTL: icmp_socket.setsockopt(socket.SOL_IP, socket.IP_TTL, TTL)
+
     try:
         # 2. Call sendOnePing function
         send_time = sendOnePing(icmp_socket, destinationAddress, port, ID)
@@ -159,7 +161,12 @@ def ping(host, port=8080, timeout=1, ping_count=4):
     msg_sent = ping_count  # it is expected that all messages would be sent and if not the this would be decremented in the loop
 
     # 1. Look up hostname, resolving it to an IP address
-    ip_address = socket.gethostbyname(str(host))
+    try:
+        ip_address = socket.gethostbyname(str(host))
+    except:
+        print "Ping request could not find host ", host, " Please check the name and try again."
+        sys.exit(0)
+
     try:
         for i in range(ping_count):
             try:
