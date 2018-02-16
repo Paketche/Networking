@@ -78,35 +78,29 @@ def checksum(string):
     return answer
 
 
-def receiveOnePing(icmpSocket, destinationAddress, port, ID, timeout):
-    icmpSocket.settimeout(timeout)
-    icmpSocket.bind(('', port))
-
+def receiveOnePing(icmpSocket, destinationAddress, ID, timeout):
     err_mess = ""
-    recv_time = -1
 
     try:
-        conn, _ = icmpSocket.accept()
 
-        ready = select.select([conn], [], [], timeout)[0]
+        ready = select.select([icmpSocket], [], [], timeout)[0]
         if ready:
-            data = conn.recv(1024)
+            data, addr = icmpSocket.recvfrom(1024)
+            recv_time = time.time()
         else:
             raise socket.timeout
 
         ip_header = data[:ip_header_size]
         ip_header = unpack_ip_header(ip_header)
 
-        icmp_mess = data[ip_header_size:struct.calcsize(m_format)]
-        icmp_mess = unpack_icmp_header(icmp_mess)
+        icmp_mess = data[ip_header_size:]
+        icmp_mess = unpack_icmp_header(icmp_mess, m_format)
 
         if ip_header['src'] != destinationAddress:
-            err_mess = error_messages.get(icmp_mess['type'] + icmp_mess['code'])
+            err_mess = error_messages.get(icmp_mess["type"] + icmp_mess["code"])
 
         elif icmp_mess['identifier'] != ID:
             err_mess = "reply id mismatch"
-
-        recv_time = time.time()
 
         return {"src": ip_header["src"], "length": int(ip_header["length"]), "recv_time": recv_time,
                 "TTL": int(ip_header['TTL']), "type": int(icmp_mess['type']), "err_mess": err_mess}
@@ -123,7 +117,7 @@ def sendOnePing(icmpSocket, destinationAddress, port, ID):
     #     raise ConnectionNotEstablished()
 
     # Send packet using socket
-    if icmpSocket.sendTo(packet, (destinationAddress, port)):
+    if not icmpSocket.sendto(packet, (destinationAddress, port)):
         raise MessageNotSent()
 
     # Record time of sending
@@ -134,18 +128,17 @@ def sendOnePing(icmpSocket, destinationAddress, port, ID):
 def doOnePing(destinationAddress, port, timeout, TTL=None):
     ID = 1
     # 1. Create ICMP socket
-    icmp_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW)
+    icmp_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.getprotobyname('icmp'))
     if TTL: icmp_socket.setsockopt(socket.SOL_IP, socket.IP_TTL, TTL)
 
     try:
         # 2. Call sendOnePing function
         send_time = sendOnePing(icmp_socket, destinationAddress, port, ID)
         # 3. Call receiveOnePing function
-        response = receiveOnePing(icmp_socket, destinationAddress, port, ID, timeout, )
+        response = receiveOnePing(icmp_socket, destinationAddress, ID, timeout)
 
         # 5. Return total network delay
-        delay = (response['recv_time'] - send_time) * 1000 // 1
-        del response['recv_time']
+        delay = round((response['recv_time'] - send_time) * 1000, 3)
         response.update({"delay": delay})
 
         return response
@@ -155,10 +148,11 @@ def doOnePing(destinationAddress, port, timeout, TTL=None):
         icmp_socket.close()
 
 
-def ping(host, port=8080, timeout=1, ping_count=4):
+def ping(host, port=80, timeout=1, ping_count=4):
     delays = []
     packets_lost = 0
-    msg_sent = ping_count  # it is expected that all messages would be sent and if not the this would be decremented in the loop
+    # it is expected that all messages would be sent and if not the this would be decremented in the loop
+    msg_sent = ping_count
 
     # 1. Look up hostname, resolving it to an IP address
     try:
@@ -167,24 +161,33 @@ def ping(host, port=8080, timeout=1, ping_count=4):
         print "Ping request could not find host ", host, " Please check the name and try again."
         sys.exit(0)
 
+    print"Pinging", host, "[", ip_address, "] just for fun"
     try:
         for i in range(ping_count):
             try:
-                response = doOnePing(ip_address, timeout, port)
+                response = doOnePing(ip_address, port, timeout)
 
                 if response['type'] == 3:
                     msg_sent -= 1
 
-                print "Reply from " + response['src'] + ": " + (
-                    "bytes=" + response['length'] + "time=" + response['delay'] + "ms TTL=" + response['TTL'] if
-                    response['type'] else "") + response['err_mess']
+                print "Reply from " + response['src'] + ": ",
+                if not response['type']:
+                    print "bytes=" + str(response['length']), "time=" + str(response['delay']) + "ms", "TTL=" + str(
+                        response['TTL']),
+
+                print response['err_mess']
+
+                # print "Reply from " + response['src'] + ": " + (
+                #     "bytes=" + response['length'] + "time=" + response['delay'] + "ms TTL=" + response['TTL'] if
+                #     not response['type'] else "") + response['err_mess']
 
                 delays.append(response['delay'])
+                time.sleep(0.1)
             except MessageNotSent as e:
-                print "ping could not be sent." + os.linesep
+                print e.message + os.linesep
                 msg_sent -= 1
             except Timeout as e:
-                print "Request timed out." + os.linesep
+                print e.message + os.linesep
                 packets_lost += 1
                 pass
 
@@ -222,23 +225,23 @@ def unpack_ip_header(header):
         # put the attributes of the ip packet into a dictionary and transform the source and the destination into proper
         # adressess
         for i in range(len(ip_keys)):
-            # if (ip_keys[i] == "src" or ip_keys[i] == "dest"):
-            #     ip_dict.update({ip_keys[i]: socket.inet_ntoa(ip_packet[i])})
-            # else:
-            ip_dict.update({ip_keys[i]: ip_packet[i]})
+            if ip_keys[i] == "src" or ip_keys[i] == "dest":
+                ip_dict.update({ip_keys[i]: socket.inet_ntoa(ip_packet[i])})
+            else:
+                ip_dict.update({ip_keys[i]: ip_packet[i]})
 
     return ip_dict
 
 
-def unpack_icmp_header(header):
+def unpack_icmp_header(header, Format):
     icmp_dict = dict()
 
     if header:
-        icmp_keys = ["type", "code", "checksum", "identifier", "seq_num", "payload"]
-        icmp_mess = struct.unpack('!BBHHH', header)
+        icmp_keys = ["type", "code", "checksum", "identifier", "seq_num"]
+        icmp_mess = struct.unpack(Format, header[:struct.calcsize(Format)])
 
         for i in range(len(icmp_mess)):
-            icmp_dict.update({icmp_keys: icmp_mess})
+            icmp_dict.update({icmp_keys[i]: icmp_mess[i]})
 
     return icmp_dict
 
@@ -250,4 +253,5 @@ def average(intlist):
     return round(sum / len(intlist), 3)
 
 
-ping("lancaster.ac.uk")
+if __name__ == "__main__":
+    ping("lancaster.ac.uk")
