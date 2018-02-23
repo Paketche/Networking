@@ -6,6 +6,15 @@ from os import linesep
 
 
 def traceroute(host, port, probes=3, timeout=1, max_hops=30):
+    """
+    performs a trace route operation
+    :param host:
+    :param port:
+    :param probes: number of pings sent before increasing the ttl
+    :param timeout:
+    :param max_hops: max number of hops before the process stops
+    :return:
+    """
     try:
         ip_address = socket.gethostbyname(str(host))
     except:
@@ -19,9 +28,9 @@ def traceroute(host, port, probes=3, timeout=1, max_hops=30):
         for i in range(probes):
             try:
                 response = icmp_ping.doOnePing(ip_address, port, timeout, ttl)
-                print str(response['delay']) + " ms\t",
+                print str(response['delay']) + "ms\t",
             except icmp_ping.Timeout:
-                print "*\t",
+                print "*\t\t",
             sleep(1)
 
         if response:
@@ -30,7 +39,7 @@ def traceroute(host, port, probes=3, timeout=1, max_hops=30):
             except:
                 print response['src'],
 
-            if response['src'] == ip_address:
+            if response['type'] == 0:
                 print linesep + "Trace complete."
                 break
 
@@ -38,4 +47,4 @@ def traceroute(host, port, probes=3, timeout=1, max_hops=30):
 
 
 if __name__ == "__main__":
-    traceroute("google.com", 80)
+    traceroute("lancaster.ac.uk", 80)

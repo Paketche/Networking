@@ -15,6 +15,7 @@ ICMP_ECHO_REPLY = 0  # ICMP type code for echo reply messages
 m_format = "bbHHh"
 ip_header_size = 20
 
+# icmp errors the keys of this dict is the type and code concatenated
 error_messages = {"30": "Destination network unreachable", "31": "Destination host unreachable",
                   "110": "TTL expired in transit"}
 
@@ -24,29 +25,9 @@ class Timeout(Exception):
         self.message = message
 
 
-# class IdMismatch(Exception):
-#     def __init__(self, message="ID's do not match"):
-#         self.message = message
-
-
-class ConnectionNotEstablished(Exception):
-    def __init__(self, message="Connection could not be established"):
-        self.message = message
-
-
 class MessageNotSent(Exception):
     def __init__(self, message="Message could not be sent"):
         self.message = message
-
-
-# class DestinationUnreachable(Exception):
-#     def __init__(self, message="Destination is unreachable"):
-#         self.message = message
-
-
-# class TTL_expired(Exception):
-#     def __init__(self, message="TTL has expired"):
-#         self.message = message
 
 
 def checksum(string):
@@ -79,26 +60,33 @@ def checksum(string):
 
 
 def receiveOnePing(icmpSocket, destinationAddress, ID, timeout):
-    err_mess = ""
 
     try:
+        # empty error message
+        err_mess = ""
 
+        # wait for timeout
         ready = select.select([icmpSocket], [], [], timeout)[0]
         if ready:
-            data, addr = icmpSocket.recvfrom(1024)
+            data, _ = icmpSocket.recvfrom(1024)
             recv_time = time.time()
         else:
             raise socket.timeout
 
+        # unpack the ip header to get stuff like src, lenght of packet, TTL
         ip_header = data[:ip_header_size]
         ip_header = unpack_ip_header(ip_header)
 
+        # unpack the icmp header to get type, code and ID
         icmp_mess = data[ip_header_size:]
         icmp_mess = unpack_icmp_header(icmp_mess, m_format)
+        print icmp_mess
 
+        # get an error from the dictionary of errors if the reply is not an echo reply
         if ip_header['src'] != destinationAddress:
             err_mess = error_messages.get(icmp_mess["type"] + icmp_mess["code"])
 
+        # check ID
         elif icmp_mess['identifier'] != ID:
             err_mess = "reply id mismatch"
 
@@ -112,10 +100,6 @@ def sendOnePing(icmpSocket, destinationAddress, port, ID):
     # Build ICMP header
     packet = construct_icmp_header(m_format, ID)
 
-    # # Connect to the other side
-    # if icmpSocket.connect_ex((destinationAddress, port)):
-    #     raise ConnectionNotEstablished()
-
     # Send packet using socket
     if not icmpSocket.sendto(packet, (destinationAddress, port)):
         raise MessageNotSent()
@@ -126,7 +110,15 @@ def sendOnePing(icmpSocket, destinationAddress, port, ID):
 
 
 def doOnePing(destinationAddress, port, timeout, TTL=None):
-    ID = 1
+    """
+    Send and receives a single ping
+    :param destinationAddress: ipv4 string of the destination address
+    :param port: port of the destination request
+    :param timeout:
+    :param TTL:
+    :return: a dictionary of the performance of the ping
+    """
+    ID = 2060
     # 1. Create ICMP socket
     icmp_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.getprotobyname('icmp'))
     if TTL: icmp_socket.setsockopt(socket.SOL_IP, socket.IP_TTL, TTL)
@@ -164,12 +156,15 @@ def ping(host, port=80, timeout=1, ping_count=4):
     print"Pinging", host, "[", ip_address, "] just for fun"
     try:
         for i in range(ping_count):
+
             try:
                 response = doOnePing(ip_address, port, timeout)
 
+                # check if the network/host was unreachable
                 if response['type'] == 3:
                     msg_sent -= 1
 
+                # print the reply and if it's a icmp reply print the corresponding stuff
                 print "Reply from " + response['src'] + ": ",
                 if not response['type']:
                     print "bytes=" + str(response['length']), "time=" + str(response['delay']) + "ms", "TTL=" + str(
@@ -177,16 +172,15 @@ def ping(host, port=80, timeout=1, ping_count=4):
 
                 print response['err_mess']
 
-                # print "Reply from " + response['src'] + ": " + (
-                #     "bytes=" + response['length'] + "time=" + response['delay'] + "ms TTL=" + response['TTL'] if
-                #     not response['type'] else "") + response['err_mess']
-
+                # put in list of dalays for statistics
                 delays.append(response['delay'])
                 time.sleep(0.1)
             except MessageNotSent as e:
+                # in case the message cannot be sent
                 print e.message + os.linesep
                 msg_sent -= 1
             except Timeout as e:
+                # in case it times out
                 print e.message + os.linesep
                 packets_lost += 1
                 pass
@@ -195,20 +189,25 @@ def ping(host, port=80, timeout=1, ping_count=4):
     except KeyboardInterrupt:
         pass
 
-        # ping results
+    # ping results
     print "\nPing statistics for " + ip_address + ":\n\tPackets: Sent = " + str(
         msg_sent) + ", Received = " + str(
         msg_sent - packets_lost) + ", Lost = " + str(packets_lost)
 
-    if not delays:
+    # if anything managed not to timeout print the statistics of the ping
+    if delays != []:
         print "Approximate round trip times in milli-seconds:\n\tMinimum = " + str(
             min(delays)) + "ms, Average = " + str(
             average(delays)) + "ms, Maximum = " + str(max(delays)) + "ms\n"
 
-    pass  # Remove/replace when function is complete
-
 
 def construct_icmp_header(m_format, ID):
+    """
+    contructs a icmp header
+    :param m_format: format of the packet for struct.pack
+    :param ID: id of the packet
+    :return: a packed header
+    """
     packet = struct.pack(m_format, ICMP_ECHO_REQUEST, 0, 0, ID, 0)
     checked = checksum(packet)
     packet = struct.pack(m_format, ICMP_ECHO_REQUEST, 0, checked, ID, 0)
@@ -216,6 +215,11 @@ def construct_icmp_header(m_format, ID):
 
 
 def unpack_ip_header(header):
+    """
+    unpacks a struct.packed ip header
+    :param header: the ip header
+    :return: a dictionary of the header
+    """
     ip_dict = dict()
 
     if header != '':
@@ -234,12 +238,18 @@ def unpack_ip_header(header):
 
 
 def unpack_icmp_header(header, Format):
+    """
+    Unpacks the icmp header into a dictionary
+    :param header: a struct.packed string
+    :param Format: the format of the packed string( for unpacking
+    :return: a dictionary of the unpacked header
+    """
     icmp_dict = dict()
-
     if header:
         icmp_keys = ["type", "code", "checksum", "identifier", "seq_num"]
         icmp_mess = struct.unpack(Format, header[:struct.calcsize(Format)])
 
+        # put the values with their keys
         for i in range(len(icmp_mess)):
             icmp_dict.update({icmp_keys[i]: icmp_mess[i]})
 
@@ -247,6 +257,11 @@ def unpack_icmp_header(header, Format):
 
 
 def average(intlist):
+    """
+    :type intlist list
+    :param intlist: a list of integers
+    :return: the average of the sum in the list
+    """
     sum = 0
     for i in intlist:
         sum += i
@@ -254,4 +269,4 @@ def average(intlist):
 
 
 if __name__ == "__main__":
-    ping("lancaster.ac.uk")
+    ping("lancaster.ac.uk", ping_count=1)
