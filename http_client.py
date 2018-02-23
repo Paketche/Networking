@@ -2,27 +2,9 @@ import socket
 import select
 import time
 import webbrowser
+import http_header
 
 client_cache_dir = "./client_cache/"
-
-
-def split_query(query):
-    '''
-    :type query str
-    :param query:
-    :return: dict
-    '''
-
-    schema, query = query.split("://", 1)
-    port = 0
-    if query.find(":") > 0:
-        host, query = query.split(":", 1)
-        port, query = query.split("/", 1)
-    else:
-        host, query = query.split("/", 1)
-
-    return {"Schema": schema, "Host": host, "Port": port, "url": query}
-
 
 def get(URL, proxy=None):
     '''
@@ -33,8 +15,9 @@ def get(URL, proxy=None):
     tcp_soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.getprotobyname("tcp"))
     default_port = 80
 
-    URL = split_query(URL)
-    http_message = construct_request("GET", URL.get("Host"), URL.get("url"))
+    # split the given string and make an http request ot of it
+    URL = http_header.split_query(URL)
+    http_message = construct_request("GET", URL.get("Host"), URL.get("URL"))
 
     if URL.get("Port"):
         default_port = int(URL.get("Port"))
@@ -50,7 +33,7 @@ def get(URL, proxy=None):
     all_data = []
     timeout = 3
     print "waiting for response"
-    ready = select.select([tcp_soc], [], [])[0]
+    ready = select.select([tcp_soc], [], [],timeout)[0]
     if ready:
         while True:
             data = tcp_soc.recv(1024)
