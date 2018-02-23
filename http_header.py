@@ -5,6 +5,11 @@ CRLF = "\r\n"
 
 
 def unpack_http_request(packet):
+    """
+    unpacks a http request
+    :param packet:
+    :return:
+    """
     unpacked = dict()
 
     request, header = str(packet).split("\r\n", 1)
@@ -26,6 +31,8 @@ def unpack_http_request(packet):
 
         unpacked.update({key: values})
 
+    # in case the url is something like http://host/url
+    unpacked.update({"URL": '/' + split_query(unpacked['URL'])['URL']})
     return unpacked
 
 
@@ -55,7 +62,28 @@ def unpack_http_response(response):
 
     unpacked.update({"version": version})
     unpacked.update({"status": status})
-
     unpacked.update({"payload": payload})
 
     return unpacked
+
+
+def split_query(query):
+    '''
+    splits a search bar query
+    :type query str
+    :param query:
+    :return: dict
+    '''
+
+    schema = None
+    if "://" in query:
+        schema, query = query.split("://", 1)
+
+    port = 0
+    if query.find(":") > 0:
+        host, query = query.split(":", 1)
+        port, query = query.split("/", 1)
+    else:
+        host, query = query.split("/", 1)
+
+    return {"Schema": schema, "Host": host, "Port": port, "URL": query}

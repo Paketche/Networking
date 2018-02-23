@@ -10,12 +10,8 @@ CRLF = "\r\n"
 
 
 def handle_request(tcp_socket):
-    print "receiving"
     packet = tcp_socket.recv(1024)
     packet = http_header.unpack_http_request(packet)
-
-    if packet.get("Method") == "GET":
-        print "this nigga wants ", packet.get("URL")
 
     response = ""
     try:
@@ -41,6 +37,7 @@ def handle_request(tcp_socket):
 
 def start_server(address, port, handle=handle_request):
     """
+    Creates a new instance of server
     """
     tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.getprotobyname("tcp"))
 
@@ -55,6 +52,12 @@ def start_server(address, port, handle=handle_request):
 
 
 def is_file_modified(path, date):
+    """
+    Checks if the file on path has been modified since date
+    :param path:
+    :param date:
+    :return:
+    """
     try:
         stat = os.stat(path)
         mod = datetime.datetime.fromtimestamp(stat.st_mtime)
