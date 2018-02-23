@@ -1,6 +1,5 @@
 import http_server
 import socket
-import os
 import datetime
 import time
 import select
@@ -25,13 +24,15 @@ def handle_request(tcp_socket):
 
     try:
         # load the cache control file. this also checks if the file is present( each file has a cache control file, if it cannot be opened the file is not in the cache)
-        cache_loc = root_dir + unpacked_req.get("Host") + unpacked_req.get("URL")
+        cache_loc = unpacked_req.get("Host") + unpacked_req.get("URL")
+        cache_loc = cache_loc.replace("/", ".")  # the caching is not smart enough and needs this
+
+        cache_loc = root_dir + cache_loc
         cc = load_cache_control_file(cache_loc + cc_file_name)
         recv_time, methods = cc
 
         # check if the file must be revalidated
         if must_reval(unpacked_req, cc):
-            print "has to revalidate"
             # if this returns false that means that the revalidated function has already sent a request to the client
             if not revalidate(tcp_socket, unpacked_req.get("Host"), request, float(recv_time)):
                 return
@@ -44,17 +45,14 @@ def handle_request(tcp_socket):
         for key in methods.keys():
             message += key + ": " + ", ".join(methods.get(key)) + CRLF
 
-        print(message)
         tcp_socket.sendall(message + CRLF + file)
     except IOError:
         # get a relay the request to the origin server and send the response back to the client while caching it
         origin_resp, recv_time = send_and_receive(unpacked_req.get("Host"), request, tcp_socket)
-        print(origin_resp)
         tcp_socket.send(origin_resp)
         cache(recv_time, request, origin_resp)
 
     finally:
-
         tcp_socket.close()
 
 
@@ -71,21 +69,20 @@ def load_cache_control_file(path):
         value(s) of of the directive
     :raises IOError if the file does not exist or its not properly formatted
     """
-    try:
-        cc = open(path).read()
-        recv_time, cc = cc.split("\n", 1)
 
-        methods = dict()
-        lines = cc.split("\n")
+    cc = open(path).read()
+    recv_time, cc = cc.split("\n", 1)
+
+    methods = dict()
+    # get directives if any exist
+    lines = cc.split("\n")
+    if lines != ['']:
         for line in lines:
             method, values = line.split(": ", 1)
             values = values.split(", ")
             methods.update({method: values})
 
-        return recv_time, methods
-    except:
-        print "could not open cc: " + path
-        raise IOError
+    return recv_time, methods
 
 
 def is_stale(recv_time, methods):
@@ -108,12 +105,14 @@ def is_stale(recv_time, methods):
     if methods.get("Cache-Control"):
         for val in methods.get("Cache-Control"):
             if "max-age" in val:
+                # calculate the second by which the file has expired
                 max = int(val.split("=")[1])
                 exp_by = age - max
                 exp_needed = False
                 break
 
     if exp_needed and methods.get("Expires"):
+        # calculate the second by which the file has expired sing the expiration date
         exp_date = datetime.datetime.strptime(methods.get("Expires")[0], "%a, %d %b %Y %H:%M:%S %Z")
         exp_by = (datetime.datetime.now() - exp_date).total_seconds()
 
@@ -132,11 +131,13 @@ def must_reval(unpacked_req, cc):
     recv_time, methods = cc
     # get the saved file's cache-control directives
     cc_values = methods.get("Cache-Control")
+    cc_values = cc_values if cc_values else []  # if the cache control file has no directives
 
     # get a list of cache-control directives from the request
     req_cc_vals = unpacked_req.get("Cache-Control")
     if req_cc_vals: cc_values += req_cc_vals
 
+    # if the cache control file has not directives there is no need to revalidate
     # in this case a revalidation is compulsory even if fresh
     if "no-cache" in cc_values:
         return True
@@ -152,6 +153,7 @@ def must_reval(unpacked_req, cc):
         if "must-revalidate" in cc_values:
             return True
 
+        # if the request has cc directives
         elif req_cc_vals:
             # check if there is a max-stale directive in the request
             for val in req_cc_vals:
@@ -163,6 +165,8 @@ def must_reval(unpacked_req, cc):
                     # else the client would take the cache
                     else:
                         return False
+
+    # if the request has cc directives
     elif req_cc_vals:
         # check if there is a min-fresh or max-age directive in the request
         for val in req_cc_vals:
@@ -192,6 +196,7 @@ def revalidate(tcp_socket, host, request, recv_time):
 
     # connect to origin and get a validation
     origin_resp, recv_time = send_and_receive(host, request, tcp_socket)
+    # if send only ifmodified
     if "304" not in http_header.unpack_http_response(origin_resp).get("status"):
         tcp_socket.sendall(origin_resp)
         cache(recv_time, request, origin_resp)
@@ -217,29 +222,30 @@ def cache(recv_time, client_request, origin_response):
     if client_request.get("Cache-Control"): cc + client_request.get("Cache-Control")
 
     # no caching should be performed in one of these cases
-    if "no-store" in cc or "private" in cc or origin_response.get("status") == '404':
+    if "no-store" in cc or "private" in cc or origin_response.get("status") not in http_header.http_codes[200]:
         return
 
     else:
-        host = client_request.get("Host")
-        # make directory is it does not exist
-        try:
-            os.stat(root_dir + host)
-        except:
-            os.mkdir(root_dir + host)
+        # transform the host and the url for the way that the files ar cached
+        dir = client_request.get("Host") + client_request.get("URL")
+        dir = dir.replace("/", ".")
 
-        cc_file = open(root_dir + host + client_request.get("URL") + " cache-control.txt", "w+")
+        # create a new cache control directive file
+        cc_file = open(root_dir + dir + " cache-control.txt", "w+")
         cc_file.write(str(recv_time) + "\n")
 
         # saves the way that determens the freshness of the file
         if origin_response.get("Cache-Control"):
             cc_file.write("Cache-Control: " + ", ".join(origin_response.get("Cache-Control")))
-        if "max-age" not in origin_response.get("Cache-Control") and origin_response.get("Expires"):
-            cc_file.write("Expires: " + origin_response.get("Expires"))
+
+            # pu the expires directive if there is not max age in the cc
+            if "max-age" not in origin_response.get("Cache-Control") and origin_response.get("Expires"):
+                cc_file.write("Expires: " + origin_response.get("Expires"))
 
         cc_file.close()
 
-        file = open(root_dir + host + client_request.get("URL"), "w+")
+        # cache te actual file
+        file = open(root_dir + dir, "w+")
         file.write(origin_response.get("payload"))
         file.close()
 
@@ -253,7 +259,6 @@ def send_and_receive(host, request, tcp_socket=None, timeout=2):
     :param timeout:
     :return:
     """
-
     origin_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     host = socket.gethostbyname(host)
 
@@ -266,14 +271,24 @@ def send_and_receive(host, request, tcp_socket=None, timeout=2):
     origin_socket.send(request)
 
     # receive response
-    ready = select.select([origin_socket], [], [])
+    ready = select.select([origin_socket], [], [],timeout)
     if not ready:
         if tcp_socket: tcp_socket.send("HTTP/1.1 504 Gateway Timeout" + 2 * CRLF)
         return None
     else:
-        origin_resp = origin_socket.recv(1024)
+        # continue receiving until you receive all
+        data = []
+        while True:
+            origin_resp = origin_socket.recv(1024)
+            if not origin_resp:
+                break
+
+            data.append(origin_resp)
+
         recv = time.time()
-        return origin_resp, recv
+
+        data = ''.join(data)
+        return data, recv
 
 
 if __name__ == "__main__":
