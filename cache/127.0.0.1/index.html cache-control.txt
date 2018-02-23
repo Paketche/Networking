@@ -1,2 +1,0 @@
-1518196483.52
-Cache-Control: max-age=100, must-revalidate
